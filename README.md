@@ -36,3 +36,6 @@ python -m http.server 5173
 5. Sube a GitHub / despliega. Cada fichaje se guarda en local **y** en la tabla `turnos`; al abrir la app se mezclan los de todos los dispositivos.
 
 Sin backend la app funciona 100% en local.
+
+## 📊 Vista de supervisor (`admin.html`)
+Página de **solo lectura** para jefes/contadores: lee la nube, muestra stats, filtros por nombre/tipo/fecha, auto-actualiza cada 30 s y exporta CSV. No permite fichar ni borrar. Compártela por link, sin cuenta de Supabase.

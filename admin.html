@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="es" class="scroll-smooth">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>GeoTurnos Admin · Supervisión de Turnos</title>
+<meta name="description" content="Vista de solo lectura para supervisores: fichajes en tiempo real desde Supabase, filtros y exportación CSV." />
+<meta name="theme-color" content="#4f46e5" />
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { darkMode: 'class', theme: { extend: { fontFamily: { sans: ['Inter','ui-sans-serif','system-ui','sans-serif'] }, boxShadow: { card: '0 4px 24px -6px rgba(0,0,0,.12)' } } } };
+(function(){ try{ const t = localStorage.getItem('geoturnos_theme'); if(t==='dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) document.documentElement.classList.add('dark'); }catch(e){} })();
+</script>
+<style>
+  body{ -webkit-tap-highlight-color: transparent; }
+  @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+  .live{ animation: pulse-dot 1.6s infinite; }
+  #toast-wrap{ position:fixed; z-index:60; left:50%; transform:translateX(-50%); bottom:calc(1rem + env(safe-area-inset-bottom)); width:min(92vw,420px); display:flex; flex-direction:column; gap:.5rem; }
+  input,select{ font-size:16px; }
+</style>
+</head>
+
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans min-h-screen flex flex-col">
+
+<header class="sticky top-0 z-40 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-2.5">
+      <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 grid place-items-center text-xl">📊</div>
+      <div>
+        <h1 class="font-extrabold tracking-tight leading-none text-[17px]">GeoTurnos · Supervisor</h1>
+        <p class="text-xs text-slate-500 dark:text-slate-400">Solo lectura · <span id="updated" class="tabular-nums">—</span></p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="live-pill" class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">⏳ Conectando…</span>
+      <button id="theme-btn" aria-label="Cambiar tema" class="w-10 h-10 rounded-xl grid place-items-center bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 transition text-lg">🌙</button>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1 w-full max-w-4xl mx-auto px-4 pb-16 pt-4 space-y-4">
+
+  <!-- Stats -->
+  <section class="grid grid-cols-3 gap-3">
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-total" class="text-2xl font-extrabold tabular-nums">—</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Fichajes</p>
+    </div>
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-open" class="text-2xl font-extrabold tabular-nums text-emerald-600 dark:text-emerald-400">—</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">En turno</p>
+    </div>
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-today" class="text-2xl font-extrabold tabular-nums text-indigo-600 dark:text-indigo-300">—</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Hoy</p>
+    </div>
+  </section>
+
+  <!-- Filtros + acciones -->
+  <section class="bg-white dark:bg-slate-900 rounded-3xl shadow-card border border-slate-200/70 dark:border-slate-800 p-5">
+    <div class="grid grid-cols-1 sm:grid-cols-[1fr_150px_170px] gap-2.5">
+      <input id="f-name" placeholder="🔎 Buscar por nombre…"
+        class="rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-4 py-2.5 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 transition" />
+      <select id="f-type"
+        class="rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-3 py-2.5 outline-none focus:border-indigo-500 font-medium">
+        <option value="ALL">Todos</option>
+        <option value="ENTRADA">🟢 Entradas</option>
+        <option value="SALIDA">🔴 Salidas</option>
+      </select>
+      <input id="f-date" type="date"
+        class="rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-3 py-2.5 outline-none focus:border-indigo-500 tabular-nums" />
+    </div>
+    <div class="grid grid-cols-3 gap-2.5 mt-3">
+      <button id="btn-refresh" class="rounded-2xl py-2.5 font-bold text-sm bg-indigo-600 text-white hover:bg-indigo-500 active:scale-[.98] transition">🔄 Actualizar</button>
+      <button id="btn-auto" class="rounded-2xl py-2.5 font-bold text-sm bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-[.98] transition">⏸️ Pausar auto</button>
+      <button id="btn-csv" class="rounded-2xl py-2.5 font-bold text-sm bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 active:scale-[.98] transition">⬇️ CSV</button>
+    </div>
+    <p class="mt-2.5 text-xs text-slate-400 dark:text-slate-500">Auto-actualiza cada 30 s · <span id="count" class="font-bold tabular-nums">0 registros</span> · <a href="./index.html" class="underline underline-offset-2 font-semibold">Ir a fichar →</a></p>
+  </section>
+
+  <!-- Lista -->
+  <section class="bg-white dark:bg-slate-900 rounded-3xl shadow-card border border-slate-200/70 dark:border-slate-800 p-5">
+    <div id="error-box" class="hidden rounded-2xl p-3 text-sm bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-200"></div>
+    <div id="logs" class="space-y-2.5"></div>
+    <div id="empty" class="text-center py-10">
+      <p class="text-5xl mb-3">📭</p>
+      <p class="font-bold">Sin registros</p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Aún no hay fichajes en la nube o no coinciden con los filtros.</p>
+    </div>
+    <div class="hidden md:block overflow-x-auto">
+      <table id="logs-table" class="hidden w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+            <th class="py-2 pr-3">Trabajador</th><th class="py-2 pr-3">Evento</th><th class="py-2 pr-3">Fecha / Hora</th><th class="py-2 pr-3">Coords</th><th class="py-2">Mapa</th>
+          </tr>
+        </thead>
+        <tbody id="logs-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="text-center text-xs text-slate-400 dark:text-slate-500">Vista de supervisor · Solo lectura · No permite fichar ni borrar</footer>
+</main>
+
+<div id="toast-wrap" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* GeoTurnos Admin — solo lectura (lee Supabase, nunca escribe ni borra) */
+const SUPABASE_URL = 'https://iqbxdxksfapscwhfiuyz.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_des0X-iC9dUPjvmYZtUPgg_9rm9JqEI';
+const TABLE = 'turnos';
+const AUTO_MS = 30000;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDT = (iso) => new Date(iso).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+const dayKey = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+
+let all = [], auto = true, timer = null;
+
+function toast(msg){
+  const el = document.createElement('div');
+  el.className = 'rounded-2xl px-4 py-3 text-sm font-semibold shadow-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900';
+  el.textContent = msg;
+  $('toast-wrap').appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(),320); }, 3000);
+}
+function setLive(ok, msg){
+  $('live-pill').innerHTML = ok ? '<span class="live">🟢</span> En vivo' : '⛔ ' + esc(msg || 'Sin conexión');
+  $('live-pill').className = ok
+    ? 'text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+    : 'text-[11px] font-bold px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300';
+}
+function badge(t){
+  return t === 'ENTRADA'
+    ? '<span class="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900">🟢 ENTRADA</span>'
+    : '<span class="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900">🔴 SALIDA</span>';
+}
+
+async function load(){
+  const box = $('error-box'); box.classList.add('hidden');
+  try{
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}?select=*&order=ts.desc&limit=1000`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    all = (Array.isArray(rows) ? rows : []).map(w => ({
+      nombre: w.worker, tipo: w.event, iso: w.ts, fecha: fmtDT(w.ts),
+      lat: w.lat, lon: w.lon, acc: w.accuracy,
+      mapsUrl: w.maps_url || `https://maps.google.com/?q=${w.lat},${w.lon}`
+    }));
+    $('updated').textContent = 'act. ' + new Date().toLocaleTimeString('es-ES');
+    setLive(true);
+    render();
+  }catch(e){
+    console.warn(e);
+    setLive(false, 'Error');
+    box.textContent = '⚠️ No se pudo leer la nube: ' + e.message + '. Revisa tu conexión e inténtalo de nuevo.';
+    box.classList.remove('hidden');
+  }
+}
+
+function filtered(){
+  const q = $('f-name').value.trim().toLowerCase();
+  const t = $('f-type').value, d = $('f-date').value;
+  return all.filter(l =>
+    (!q || l.nombre.toLowerCase().includes(q)) &&
+    (t === 'ALL' || l.tipo === t) &&
+    (!d || dayKey(l.iso) === d)
+  );
+}
+
+function render(){
+  const list = filtered();
+  $('count').textContent = `${list.length} registro${list.length===1?'':'s'}`;
+  $('empty').style.display = list.length ? 'none' : 'block';
+  $('stat-total').textContent = all.length;
+  $('stat-today').textContent = all.filter(l => dayKey(l.iso) === dayKey(new Date().toISOString())).length;
+  const lastBy = {};
+  [...all].reverse().forEach(l => { lastBy[l.nombre.toLowerCase()] = l.tipo; });
+  $('stat-open').textContent = Object.values(lastBy).filter(t => t === 'ENTRADA').length;
+
+  $('logs').innerHTML = list.map(l => `
+    <article class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 p-3.5 flex gap-3 items-start">
+      <div class="w-10 h-10 shrink-0 rounded-xl grid place-items-center font-bold text-white ${l.tipo==='ENTRADA'?'bg-emerald-500':'bg-rose-500'}">${esc(l.nombre.trim().charAt(0).toUpperCase()||'?')}</div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <p class="font-bold truncate">${esc(l.nombre)}</p>${badge(l.tipo)}
+        </div>
+        <p class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">🕒 ${esc(l.fecha)}</p>
+        <p class="text-[12px] text-slate-400 dark:text-slate-500 tabular-nums">📍 ${l.lat}, ${l.lon}${l.acc!=null?` · ±${l.acc} m`:''}</p>
+        <a href="${esc(l.mapsUrl)}" target="_blank" rel="noopener" class="inline-block mt-2 text-[13px] font-bold px-3 py-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 active:scale-95 transition">🗺️ Ver en Mapa</a>
+      </div>
+    </article>`).join('');
+
+  const desktop = matchMedia('(min-width: 768px)').matches;
+  $('logs-table').classList.toggle('hidden', !(desktop && list.length));
+  $('logs-tbody').innerHTML = list.map(l => `
+    <tr class="border-b border-slate-100 dark:border-slate-800">
+      <td class="py-2.5 pr-3 font-semibold">${esc(l.nombre)}</td>
+      <td class="py-2.5 pr-3">${badge(l.tipo)}</td>
+      <td class="py-2.5 pr-3 tabular-nums whitespace-nowrap">${esc(l.fecha)}</td>
+      <td class="py-2.5 pr-3 tabular-nums text-slate-500">${l.lat}, ${l.lon}</td>
+      <td class="py-2.5"><a class="font-bold text-indigo-600 dark:text-indigo-300 underline underline-offset-2" target="_blank" rel="noopener" href="${esc(l.mapsUrl)}">Mapa ↗</a></td>
+    </tr>`).join('');
+}
+
+$('f-name').addEventListener('input', render);
+$('f-type').addEventListener('change', render);
+$('f-date').addEventListener('change', render);
+matchMedia('(min-width: 768px)').addEventListener?.('change', render);
+$('btn-refresh').addEventListener('click', load);
+$('btn-auto').addEventListener('click', ()=>{
+  auto = !auto;
+  $('btn-auto').textContent = auto ? '⏸️ Pausar auto' : '▶️ Reanudar auto';
+  restartAuto(); toast(auto ? 'Auto-actualización activada.' : 'Auto-actualización pausada.');
+});
+$('btn-csv').addEventListener('click', ()=>{
+  const list = filtered();
+  if(!list.length){ toast('No hay registros para exportar.'); return; }
+  const q = (v) => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const head = ['Nombre','Evento','FechaHora','Latitud','Longitud','Precision_m','GoogleMaps'];
+  const rows = list.map(l => [l.nombre, l.tipo, l.fecha, l.lat, l.lon, l.acc ?? '', l.mapsUrl].map(q).join(','));
+  const blob = new Blob(['﻿' + head.map(q).join(',') + '\r\n' + rows.join('\r\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `geoturnos_admin_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  toast(`CSV exportado con ${list.length} registros.`);
+});
+
+function restartAuto(){ clearInterval(timer); if(auto) timer = setInterval(load, AUTO_MS); }
+
+function paintTheme(){ $('theme-btn').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙'; }
+$('theme-btn').addEventListener('click', ()=>{
+  document.documentElement.classList.toggle('dark');
+  try{ localStorage.setItem('geoturnos_theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light'); }catch(e){}
+  paintTheme();
+});
+paintTheme();
+restartAuto();
+load();
+</script>
+</body>
+</html>
