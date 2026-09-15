@@ -235,25 +235,69 @@ const STORAGE_KEY = 'geoturnos_logs_v1';
 const THEME_KEY = 'geoturnos_theme';
 const LAST_WORKER_KEY = 'geoturnos_last_worker';
 
-/* ---- 🔌 CONECTOR BACKEND (opcional) ----
-   Ejemplo Supabase: { type:'supabase', url:'https://xyz.supabase.co', anonKey:'...', table:'turnos', enabled:true }
-   Ejemplo Sheets  : { type:'sheets', webhookUrl:'https://script.google.com/macros/s/.../exec', enabled:true }
-   Deja enabled:false para modo solo-local. */
-const BACKEND = { enabled: false, type: 'supabase', url: '', anonKey: '', table: 'turnos', webhookUrl: '' };
+/* ---- 🔌 BACKEND SUPABASE ----
+   1) Crea un proyecto gratis en https://supabase.com
+   2) SQL Editor → pega supabase_schema.sql → Run
+   3) Settings → API → copia Project URL y anon public key aquí abajo
+   4) Pon enabled: true, guarda, sube a GitHub y listo.
+   (Opcional Google Sheets: type:'sheets', webhookUrl:'...', enabled:true) */
+const BACKEND = {
+  enabled: true,
+  type: 'supabase',
+  url: 'https://iqbxdxksfapscwhfiuyz.supabase.co',
+  anonKey: 'sb_publishable_des0X-iC9dUPjvmYZtUPgg_9rm9JqEI',
+  table: 'turnos',
+  webhookUrl: ''
+};
 
+function backendReady(){
+  if(!BACKEND.enabled) return false;
+  if(BACKEND.type === 'supabase') return !!(BACKEND.url && BACKEND.anonKey && !BACKEND.url.includes('TU_SUPABASE'));
+  if(BACKEND.type === 'sheets') return !!BACKEND.webhookUrl;
+  return false;
+}
+
+// Sube cada fichaje a la nube (sin bloquear la app; lo local siempre se guarda)
 async function syncToBackend(log){
-  if(!BACKEND.enabled) return;
+  if(!backendReady()) return false;
   try{
-    if(BACKEND.type === 'supabase' && BACKEND.url && BACKEND.anonKey){
-      await fetch(`${BACKEND.url}/rest/v1/${BACKEND.table}`, {
+    if(BACKEND.type === 'supabase'){
+      const r = await fetch(`${BACKEND.url}/rest/v1/${BACKEND.table}`, {
         method:'POST',
-        headers:{ 'Content-Type':'application/json', apikey: BACKEND.anonKey, Authorization: `Bearer ${BACKEND.anonKey}`, Prefer:'return=minimal' },
-        body: JSON.stringify({ worker: log.nombre, event: log.tipo, ts: log.iso, lat: log.lat, lon: log.lon, accuracy: log.acc, maps_url: log.mapsUrl })
+        headers:{ 'Content-Type':'application/json', apikey: BACKEND.anonKey, Authorization: `Bearer ${BACKEND.anonKey}`, Prefer:'return=representation' },
+        body: JSON.stringify({ id: log.id, worker: log.nombre, event: log.tipo, ts: log.iso, lat: log.lat, lon: log.lon, accuracy: log.acc, maps_url: log.mapsUrl })
       });
-    } else if(BACKEND.type === 'sheets' && BACKEND.webhookUrl){
-      await fetch(BACKEND.webhookUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify(log) });
+      if(!r.ok) throw new Error('Supabase POST ' + r.status);
+      return true;
     }
-  }catch(e){ console.warn('Sync backend falló (modo local sigue activo):', e); }
+    if(BACKEND.type === 'sheets'){
+      await fetch(BACKEND.webhookUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify(log) });
+      return true;
+    }
+  }catch(e){ console.warn('Nube no disponible, el fichaje quedó guardado en local:', e); }
+  return false;
+}
+
+// Al abrir la app, mezcla los fichajes de la nube (otros celulares) con los locales
+async function pullFromBackend(){
+  if(!backendReady() || BACKEND.type !== 'supabase') return;
+  try{
+    const r = await fetch(`${BACKEND.url}/rest/v1/${BACKEND.table}?select=*&order=ts.desc&limit=500`, {
+      headers:{ apikey: BACKEND.anonKey, Authorization: `Bearer ${BACKEND.anonKey}` }
+    });
+    if(!r.ok) throw new Error('Supabase GET ' + r.status);
+    const rows = await r.json();
+    if(!Array.isArray(rows) || !rows.length) return;
+    const remote = rows.map(w => ({
+      id: w.id, nombre: w.worker, tipo: w.event, iso: w.ts,
+      fecha: fmtDateTime(w.ts), lat: w.lat, lon: w.lon, acc: w.accuracy,
+      mapsUrl: w.maps_url || `https://maps.google.com/?q=${w.lat},${w.lon}`
+    }));
+    const seen = new Set(remote.map(l => l.id));
+    const onlyLocal = loadLogs().filter(l => !seen.has(l.id));
+    const merged = [...remote, ...onlyLocal].sort((a,b) => new Date(b.iso) - new Date(a.iso)).slice(0, 1000);
+    saveLogs(merged); render();
+  }catch(e){ console.warn('No se pudo leer la nube (sigo en local):', e); }
 }
 
 /* ---------- Estado ---------- */
@@ -547,6 +591,7 @@ if(!('geolocation' in navigator)){
 workerInput.value = getLastWorker(); // restaura el nombre guardado
 paintWorkerSaved();
 render();
+pullFromBackend(); // si hay nube configurada, mezcla fichajes de otros dispositivos
 </script>
 </body>
 </html>

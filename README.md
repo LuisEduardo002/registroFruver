@@ -28,9 +28,11 @@ python -m http.server 5173
 - Stats: total, en turno ahora, fichajes de hoy. Autocompletado + chips de trabajadores recientes.
 - Modo claro/oscuro, toasts, manejo amable de errores GPS (permiso denegado, sin señal, timeout, no soportado).
 
-## 🔌 Backend opcional
-En `index.html` hay un objeto `BACKEND` + función `syncToBackend(log)`:
-- **Supabase:** pon `url`, `anonKey`, `table` y `enabled: true`.
-- **Google Sheets:** crea un Apps Script que reciba POST y pon su URL en `webhookUrl` con `type: 'sheets'`.
+## 🔌 Nube con Supabase (ver fichajes de todos los celulares)
+1. Crea un proyecto gratis en https://supabase.com → **New project**.
+2. **SQL Editor → New query** → pega todo el archivo `supabase_schema.sql` → **Run**.
+3. **Settings → API** → copia **Project URL** y **anon public key**.
+4. En `index.html`, objeto `BACKEND`: pega `url` y `anonKey`, pon `enabled: true`.
+5. Sube a GitHub / despliega. Cada fichaje se guarda en local **y** en la tabla `turnos`; al abrir la app se mezclan los de todos los dispositivos.
 
 Sin backend la app funciona 100% en local.
