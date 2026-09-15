@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es" class="scroll-smooth">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>GeoTurnos · Control y Registro de Turnos con Geolocalización</title>
+<meta name="description" content="App mobile-first para fichar turnos de trabajadores con GPS, historial, filtros y exportación a CSV. Funciona con localStorage, lista para Supabase / Google Sheets." />
+<meta name="theme-color" content="#4f46e5" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter','ui-sans-serif','system-ui','sans-serif'] },
+      boxShadow: {
+        soft: '0 8px 30px rgba(0,0,0,.08)',
+        card: '0 4px 24px -6px rgba(0,0,0,.12)'
+      }
+    }
+  }
+}
+// Tema inicial (evita flash)
+(function(){
+  try{
+    const t = localStorage.getItem('geoturnos_theme');
+    if(t==='dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)){
+      document.documentElement.classList.add('dark');
+    }
+  }catch(e){}
+})();
+</script>
+<style>
+  body{ -webkit-tap-highlight-color: transparent; }
+  .btn-touch{ min-height:64px; }
+  @keyframes shake{10%,90%{transform:translateX(-1px)}20%,80%{transform:translateX(2px)}30%,50%,70%{transform:translateX(-4px)}40%,60%{transform:translateX(4px)}}
+  .shake{ animation: shake .45s both; }
+  @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+  .pulse-dot{ animation: pulse-dot 1.1s infinite; }
+  .spinner{ width:20px;height:20px;border-radius:9999px;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .8s linear infinite }
+  .spinner-dark{ border-color:rgba(79,70,229,.25); border-top-color:#4f46e5; }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #toast-wrap{ position:fixed; z-index:60; left:50%; transform:translateX(-50%); bottom:calc(1rem + env(safe-area-inset-bottom)); width:min(92vw,420px); display:flex; flex-direction:column; gap:.5rem; }
+  .toast{ animation: toast-in .25s ease-out; }
+  @keyframes toast-in{from{opacity:0; transform:translateY(10px)}to{opacity:1; transform:none}}
+  input,select{ font-size:16px; } /* evita zoom en iOS */
+  .no-scrollbar::-webkit-scrollbar{display:none} .no-scrollbar{scrollbar-width:none}
+</style>
+</head>
+
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans min-h-screen flex flex-col">
+
+<!-- ===== HEADER ===== -->
+<header class="sticky top-0 z-40 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-2.5">
+      <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 grid place-items-center text-xl shadow-soft">🛰️</div>
+      <div>
+        <h1 class="font-extrabold tracking-tight leading-none text-[17px]">GeoTurnos</h1>
+        <p class="text-xs text-slate-500 dark:text-slate-400">Fichaje con GPS · <span id="clock" class="tabular-nums font-medium">--:--:--</span></p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="gps-pill" class="hidden sm:inline-flex text-[11px] font-semibold px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">📍 GPS listo</span>
+      <button id="theme-btn" aria-label="Cambiar tema" class="w-10 h-10 rounded-xl grid place-items-center bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 transition text-lg">🌙</button>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1 w-full max-w-3xl mx-auto px-4 pb-28 pt-4 space-y-4">
+
+  <!-- ===== ESTADO / AVISO HTTPS ===== -->
+  <div id="https-warn" class="hidden rounded-2xl p-3 text-sm bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
+    ⚠️ Estás en <b>HTTP / file://</b>. El GPS puede fallar en móviles. Despliega en <b>HTTPS</b> (Netlify, Vercel o GitHub Pages) para producción.
+  </div>
+
+  <!-- ===== CARD FICHAJE ===== -->
+  <section class="bg-white dark:bg-slate-900 rounded-3xl shadow-card border border-slate-200/70 dark:border-slate-800 p-5 sm:p-6">
+    <div class="flex items-center justify-between mb-1">
+      <h2 class="font-bold text-lg">👷 Control de fichaje</h2>
+      <span class="text-[11px] font-bold px-2 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900">ALTA PRECISIÓN</span>
+    </div>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Escribe tu nombre y pulsa iniciar o finalizar. Se pedirá tu ubicación.</p>
+
+    <div class="flex items-center justify-between">
+      <label for="worker" class="text-sm font-semibold">Nombre del trabajador <span class="text-rose-500">*</span></label>
+      <button id="forget-worker" class="hidden text-xs font-bold text-slate-400 hover:text-rose-500 transition underline underline-offset-2">Olvidar nombre</button>
+    </div>
+    <input id="worker" list="workers-list" autocomplete="name" placeholder="Ej. María García"
+      class="mt-1.5 w-full rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-4 py-3.5 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 transition placeholder:text-slate-400" />
+    <datalist id="workers-list"></datalist>
+    <p id="worker-error" class="hidden mt-1.5 text-sm text-rose-600 dark:text-rose-400 font-medium">⚠️ Escribe el nombre del trabajador (mín. 2 letras).</p>
+    <p id="worker-saved" class="hidden mt-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">💾 Nombre recordado en este dispositivo.</p>
+
+    <!-- Atajos trabajadores recientes -->
+    <div id="recent-wrap" class="hidden mt-3">
+      <p class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5">Recientes:</p>
+      <div id="recent-chips" class="flex gap-2 overflow-x-auto no-scrollbar pb-1"></div>
+    </div>
+
+    <!-- Botones acción -->
+    <div class="grid grid-cols-2 gap-3 mt-4">
+      <button id="btn-in"
+        class="btn-touch rounded-2xl font-extrabold text-white text-[15px] sm:text-base bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-600 shadow-lg shadow-emerald-600/25 active:scale-[.97] transition flex flex-col items-center justify-center gap-0.5 disabled:opacity-60 disabled:pointer-events-none">
+        <span class="text-2xl leading-none">🟢</span><span>Iniciar Turno</span>
+        <span class="text-[11px] font-medium opacity-80">ENTRADA + GPS</span>
+      </button>
+      <button id="btn-out"
+        class="btn-touch rounded-2xl font-extrabold text-white text-[15px] sm:text-base bg-gradient-to-b from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-600 shadow-lg shadow-rose-600/25 active:scale-[.97] transition flex flex-col items-center justify-center gap-0.5 disabled:opacity-60 disabled:pointer-events-none">
+        <span class="text-2xl leading-none">🔴</span><span>Finalizar Turno</span>
+        <span class="text-[11px] font-medium opacity-80">SALIDA + GPS</span>
+      </button>
+    </div>
+
+    <!-- Indicador de estado -->
+    <div id="status" role="status" aria-live="polite"
+      class="mt-4 rounded-2xl px-4 py-3 text-sm font-medium bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
+      <span id="status-icon" class="text-base leading-none mt-0.5">📍</span>
+      <span id="status-text">Listo. Pulsa un botón para fichar con tu ubicación GPS.</span>
+    </div>
+
+    <!-- Preview última coordenada -->
+    <div id="last-fix" class="hidden mt-3 rounded-2xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-3 text-[13px]">
+      <p class="font-bold text-emerald-700 dark:text-emerald-300">✅ Último fichaje registrado</p>
+      <p id="last-fix-text" class="text-slate-600 dark:text-slate-300 mt-0.5 tabular-nums"></p>
+      <a id="last-fix-link" href="#" target="_blank" rel="noopener" class="inline-flex mt-1.5 font-semibold text-indigo-600 dark:text-indigo-300 underline underline-offset-2">Ver en Google Maps 🗺️</a>
+    </div>
+
+    <p class="mt-3 text-[12px] text-slate-400 dark:text-slate-500">🔒 La ubicación solo se captura al fichar. Precisión típica: 5–30 m en exteriores.</p>
+  </section>
+
+  <!-- ===== STATS ===== -->
+  <section class="grid grid-cols-3 gap-3">
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-total" class="text-2xl font-extrabold tabular-nums">0</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Fichajes</p>
+    </div>
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-open" class="text-2xl font-extrabold tabular-nums text-emerald-600 dark:text-emerald-400">0</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">En turno</p>
+    </div>
+    <div class="bg-white dark:bg-slate-900 rounded-2xl shadow-card border border-slate-200/70 dark:border-slate-800 p-3.5 text-center">
+      <p id="stat-today" class="text-2xl font-extrabold tabular-nums text-indigo-600 dark:text-indigo-300">0</p>
+      <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Hoy</p>
+    </div>
+  </section>
+
+  <!-- ===== HISTORIAL ===== -->
+  <section class="bg-white dark:bg-slate-900 rounded-3xl shadow-card border border-slate-200/70 dark:border-slate-800 p-5 sm:p-6">
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <h2 class="font-bold text-lg">📋 Historial</h2>
+      <span id="count-badge" class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 tabular-nums">0 registros</span>
+    </div>
+
+    <!-- Filtros -->
+    <div class="grid grid-cols-1 sm:grid-cols-[1fr_150px] gap-2.5">
+      <input id="filter-name" placeholder="🔎 Filtrar por nombre…"
+        class="rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-4 py-2.5 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 transition" />
+      <select id="filter-type"
+        class="rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-3 py-2.5 outline-none focus:border-indigo-500 font-medium">
+        <option value="ALL">Todos</option>
+        <option value="ENTRADA">🟢 Entradas</option>
+        <option value="SALIDA">🔴 Salidas</option>
+      </select>
+    </div>
+
+    <!-- Acciones -->
+    <div class="grid grid-cols-2 gap-2.5 mt-3">
+      <button id="btn-csv" class="rounded-2xl py-3 font-bold text-sm bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 active:scale-[.98] transition">⬇️ Exportar CSV</button>
+      <button id="btn-clear" class="rounded-2xl py-3 font-bold text-sm bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 border-2 border-rose-200 dark:border-rose-900 hover:bg-rose-100 dark:hover:bg-rose-950 active:scale-[.98] transition">🗑️ Borrar</button>
+    </div>
+
+    <!-- Lista -->
+    <div id="logs" class="mt-4 space-y-2.5"></div>
+
+    <!-- Vacío -->
+    <div id="empty" class="text-center py-10">
+      <p class="text-5xl mb-3">📭</p>
+      <p class="font-bold">Sin registros todavía</p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Ficha tu primer turno arriba y aparecerá aquí.<br/>Los datos se guardan en este dispositivo.</p>
+    </div>
+
+    <!-- Tabla desktop -->
+    <div class="hidden md:block overflow-x-auto mt-2">
+      <table id="logs-table" class="hidden w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+            <th class="py-2 pr-3">Trabajador</th><th class="py-2 pr-3">Evento</th><th class="py-2 pr-3">Fecha / Hora</th><th class="py-2 pr-3">Coords</th><th class="py-2">Mapa</th>
+          </tr>
+        </thead>
+        <tbody id="logs-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== INTEGRACIÓN ===== -->
+  <section class="rounded-3xl p-5 border border-dashed border-slate-300 dark:border-slate-700 text-sm text-slate-600 dark:text-slate-400 bg-white/50 dark:bg-slate-900/50">
+    <p class="font-bold text-slate-800 dark:text-slate-200">🔌 Listo para backend (opcional)</p>
+    <p class="mt-1">Los registros se guardan en <code class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[12px] font-mono">localStorage</code>. Para multi-dispositivo, configura el objeto <code class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[12px] font-mono">BACKEND</code> al final del <code class="text-[12px] font-mono">&lt;script&gt;</code> con tu URL de <b>Supabase</b> o <b>Google Sheets (Apps Script)</b> y activa <code class="text-[12px] font-mono">enabled: true</code>. Sin backend, la app funciona 100% offline-local.</p>
+  </section>
+
+  <footer class="text-center text-xs text-slate-400 dark:text-slate-500 pt-2">
+    GeoTurnos · Mobile-first · Tailwind · Geolocation API · Hecho para Netlify / Vercel / GitHub Pages
+  </footer>
+</main>
+
+<!-- ===== MODAL BORRAR ===== -->
+<div id="modal" class="hidden fixed inset-0 z-50 grid place-items-center p-4 bg-slate-950/60 backdrop-blur-sm">
+  <div class="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-700">
+    <p class="text-4xl mb-2">⚠️</p>
+    <h3 class="font-extrabold text-lg">¿Borrar todo el historial?</h3>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Esta acción elimina <b id="modal-count">0</b> registros de este dispositivo y <b>no se puede deshacer</b>.</p>
+    <div class="grid grid-cols-2 gap-2.5 mt-5">
+      <button id="modal-cancel" class="rounded-2xl py-3 font-bold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-[.98] transition">Cancelar</button>
+      <button id="modal-confirm" class="rounded-2xl py-3 font-bold bg-rose-600 text-white hover:bg-rose-500 active:scale-[.98] transition">Sí, borrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-wrap" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* ============================================================
+   GeoTurnos — Control de Turnos con Geolocalización
+   Persistencia: localStorage (sin servidor)
+   Backend opcional: Supabase / Google Sheets vía BACKEND
+   ============================================================ */
+const STORAGE_KEY = 'geoturnos_logs_v1';
+const THEME_KEY = 'geoturnos_theme';
+const LAST_WORKER_KEY = 'geoturnos_last_worker';
+
+/* ---- 🔌 CONECTOR BACKEND (opcional) ----
+   Ejemplo Supabase: { type:'supabase', url:'https://xyz.supabase.co', anonKey:'...', table:'turnos', enabled:true }
+   Ejemplo Sheets  : { type:'sheets', webhookUrl:'https://script.google.com/macros/s/.../exec', enabled:true }
+   Deja enabled:false para modo solo-local. */
+const BACKEND = { enabled: false, type: 'supabase', url: '', anonKey: '', table: 'turnos', webhookUrl: '' };
+
+async function syncToBackend(log){
+  if(!BACKEND.enabled) return;
+  try{
+    if(BACKEND.type === 'supabase' && BACKEND.url && BACKEND.anonKey){
+      await fetch(`${BACKEND.url}/rest/v1/${BACKEND.table}`, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', apikey: BACKEND.anonKey, Authorization: `Bearer ${BACKEND.anonKey}`, Prefer:'return=minimal' },
+        body: JSON.stringify({ worker: log.nombre, event: log.tipo, ts: log.iso, lat: log.lat, lon: log.lon, accuracy: log.acc, maps_url: log.mapsUrl })
+      });
+    } else if(BACKEND.type === 'sheets' && BACKEND.webhookUrl){
+      await fetch(BACKEND.webhookUrl, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify(log) });
+    }
+  }catch(e){ console.warn('Sync backend falló (modo local sigue activo):', e); }
+}
+
+/* ---------- Estado ---------- */
+const $ = (id) => document.getElementById(id);
+const workerInput = $('worker'), workerError = $('worker-error');
+const btnIn = $('btn-in'), btnOut = $('btn-out');
+const statusBox = $('status'), statusIcon = $('status-icon'), statusText = $('status-text');
+const logsEl = $('logs'), emptyEl = $('empty'), tbody = $('logs-tbody'), table = $('logs-table');
+const filterName = $('filter-name'), filterType = $('filter-type'), countBadge = $('count-badge');
+
+let busy = false;
+
+/* ---------- Utilidades ---------- */
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-'+Date.now()+'-'+Math.random().toString(16).slice(2));
+const fmtDateTime = (iso) => new Date(iso).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+const fmtShort = (iso) => new Date(iso).toLocaleString('es-ES', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+
+function toast(msg, kind='info'){
+  const colors = { info:'bg-slate-900 dark:bg-white text-white dark:text-slate-900', ok:'bg-emerald-600 text-white', err:'bg-rose-600 text-white', warn:'bg-amber-500 text-white' };
+  const icons = { info:'ℹ️', ok:'✅', err:'⛔', warn:'⚠️' };
+  const el = document.createElement('div');
+  el.className = `toast rounded-2xl px-4 py-3 text-sm font-semibold shadow-2xl flex items-start gap-2 ${colors[kind]||colors.info}`;
+  el.innerHTML = `<span>${icons[kind]||icons.info}</span><span>${esc(msg)}</span>`;
+  $('toast-wrap').appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s, transform .3s'; el.style.opacity='0'; el.style.transform='translateY(8px)'; setTimeout(()=>el.remove(), 320); }, 3400);
+}
+
+function setStatus(kind, msg, loading=false){
+  const styles = {
+    idle:  'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300',
+    load:  'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-900 text-indigo-800 dark:text-indigo-200',
+    ok:    'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-200',
+    err:   'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-200'
+  };
+  statusBox.className = `mt-4 rounded-2xl px-4 py-3 text-sm font-medium border flex items-start gap-2.5 ${styles[kind]||styles.idle}`;
+  statusIcon.innerHTML = loading ? '<span class="spinner spinner-dark inline-block"></span>' : ({idle:'📍',load:'<span class="pulse-dot">🛰️</span>',ok:'✅',err:'⚠️'}[kind]||'📍');
+  statusText.textContent = msg;
+}
+
+/* ---------- Persistencia ---------- */
+function loadLogs(){
+  try{ const raw = localStorage.getItem(STORAGE_KEY); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; }
+  catch(e){ console.warn(e); return []; }
+}
+function saveLogs(logs){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(logs)); }catch(e){ toast('No se pudo guardar (almacenamiento lleno o bloqueado).','err'); } }
+
+/* ---------- GPS ---------- */
+function getPosition(){
+  return new Promise((resolve, reject) => {
+    if(!('geolocation' in navigator)) return reject({ code:'UNSUPPORTED' });
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy:true, timeout:15000, maximumAge:0 });
+  });
+}
+function gpsErrorMessage(err){
+  if(err && err.code === 'UNSUPPORTED') return 'Este dispositivo o navegador no soporta geolocalización. Prueba con Chrome en Android o Safari en iPhone con HTTPS.';
+  if(!err || typeof err.code === 'undefined') return 'No se pudo obtener la ubicación.';
+  switch(err.code){
+    case 1: return 'Permiso de ubicación denegado. Actívalo: candado de la barra del navegador → Permisos → Ubicación → Permitir, y vuelve a intentarlo.';
+    case 2: return 'Ubicación no disponible. Activa el GPS del dispositivo, sal al exterior o cerca de una ventana e inténtalo de nuevo.';
+    case 3: return 'Se agotó el tiempo esperando el GPS. Inténtalo de nuevo en una zona con mejor señal.';
+    default: return 'Error de GPS desconocido. Reinténtalo.';
+  }
+}
+
+/* ---------- Fichaje ---------- */
+function validName(){
+  const v = workerInput.value.trim();
+  const ok = v.length >= 2;
+  workerError.classList.toggle('hidden', ok);
+  workerInput.classList.toggle('shake', !ok);
+  workerInput.classList.toggle('border-rose-400', !ok);
+  if(!ok) setTimeout(()=>workerInput.classList.remove('shake'), 500);
+  return ok ? v : null;
+}
+/* ---------- Nombre recordado para siempre ---------- */
+function saveLastWorker(nombre){
+  try{
+    const v = String(nombre ?? '').trim();
+    if(v.length >= 2){ localStorage.setItem(LAST_WORKER_KEY, v); paintWorkerSaved(); }
+  }catch(e){}
+}
+function getLastWorker(){ try{ return (localStorage.getItem(LAST_WORKER_KEY) || '').trim(); }catch(e){ return ''; } }
+function paintWorkerSaved(){
+  const has = workerInput.value.trim().length >= 2 || getLastWorker().length >= 2;
+  $('worker-saved').classList.toggle('hidden', !has);
+  $('forget-worker').classList.toggle('hidden', !has);
+}
+workerInput.addEventListener('input', ()=>{
+  workerError.classList.add('hidden'); workerInput.classList.remove('border-rose-400');
+  saveLastWorker(workerInput.value); // autoguardado mientras escribe
+});
+$('forget-worker').addEventListener('click', ()=>{
+  try{ localStorage.removeItem(LAST_WORKER_KEY); }catch(e){}
+  workerInput.value = ''; paintWorkerSaved(); workerInput.focus();
+  toast('Nombre olvidado en este dispositivo.','info');
+});
+
+async function fichar(tipo){
+  if(busy) return;
+  const nombre = validName();
+  if(!nombre){ workerInput.focus(); toast('Escribe el nombre del trabajador primero.','warn'); return; }
+  saveLastWorker(nombre);
+  busy = true; btnIn.disabled = btnOut.disabled = true;
+
+  const label = tipo === 'ENTRADA' ? 'iniciando' : 'finalizando';
+  setStatus('load', `Obteniendo ubicación GPS y ${label} turno de ${nombre}…`, true);
+
+  try{
+    const pos = await getPosition();
+    const lat = +pos.coords.latitude.toFixed(6);
+    const lon = +pos.coords.longitude.toFixed(6);
+    const acc = pos.coords.accuracy != null ? Math.round(pos.coords.accuracy) : null;
+    const now = new Date();
+    const log = {
+      id: uid(), nombre,
+      tipo, iso: now.toISOString(),
+      fecha: fmtDateTime(now.toISOString()),
+      lat, lon, acc,
+      mapsUrl: `https://maps.google.com/?q=${lat},${lon}`
+    };
+
+    // Aviso de coherencia (doble entrada / salida sin entrada)
+    const logs = loadLogs();
+    const last = logs.filter(l => l.nombre.toLowerCase() === nombre.toLowerCase())[0];
+    if(last && last.tipo === tipo){
+      toast(tipo === 'ENTRADA' ? `Aviso: ${nombre} ya tenía un turno abierto. Se registra igualmente.` : `Aviso: no había turno abierto para ${nombre}. Se registra igualmente.`, 'warn');
+    }
+
+    logs.unshift(log); saveLogs(logs); syncToBackend(log);
+    setStatus('ok', `Turno ${tipo === 'ENTRADA' ? 'iniciado' : 'finalizado'} con éxito · ${nombre} · ${log.fecha} · ±${acc ?? '?'} m`);
+    $('last-fix').classList.remove('hidden');
+    $('last-fix-text').textContent = `${nombre} · ${tipo} · ${lat}, ${lon}${acc!=null?` · ±${acc} m`:''}`;
+    $('last-fix-link').href = log.mapsUrl;
+    toast(`${tipo === 'ENTRADA' ? 'Turno iniciado' : 'Turno finalizado'} · ${nombre}`, 'ok');
+    render();
+  }catch(err){
+    console.warn(err);
+    setStatus('err', gpsErrorMessage(err));
+    toast(gpsErrorMessage(err), 'err');
+  }finally{
+    busy = false; btnIn.disabled = btnOut.disabled = false;
+  }
+}
+btnIn.addEventListener('click', ()=>fichar('ENTRADA'));
+btnOut.addEventListener('click', ()=>fichar('SALIDA'));
+
+/* ---------- Render / filtros / stats ---------- */
+function badge(tipo){
+  return tipo === 'ENTRADA'
+    ? '<span class="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900">🟢 ENTRADA</span>'
+    : '<span class="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900">🔴 SALIDA</span>';
+}
+
+function filtered(){
+  const q = filterName.value.trim().toLowerCase();
+  const t = filterType.value;
+  return loadLogs().filter(l =>
+    (!q || l.nombre.toLowerCase().includes(q)) &&
+    (t === 'ALL' || l.tipo === t)
+  );
+}
+
+function render(){
+  const all = loadLogs();
+  const list = filtered();
+  countBadge.textContent = `${list.length} registro${list.length===1?'':'s'}`;
+  emptyEl.style.display = list.length ? 'none' : 'block';
+
+  // Tarjetas (mobile-first)
+  logsEl.innerHTML = list.map(l => `
+    <article class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 p-3.5 flex gap-3 items-start">
+      <div class="w-10 h-10 shrink-0 rounded-xl grid place-items-center font-bold text-white ${l.tipo==='ENTRADA'?'bg-emerald-500':'bg-rose-500'}">${esc(l.nombre.trim().charAt(0).toUpperCase()||'?')}</div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <p class="font-bold truncate">${esc(l.nombre)}</p>${badge(l.tipo)}
+        </div>
+        <p class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">🕒 ${esc(l.fecha || fmtDateTime(l.iso))}</p>
+        <p class="text-[12px] text-slate-400 dark:text-slate-500 tabular-nums">📍 ${l.lat}, ${l.lon}${l.acc!=null?` · ±${l.acc} m`:''}</p>
+        <div class="flex gap-2 mt-2">
+          <a href="${esc(l.mapsUrl)}" target="_blank" rel="noopener" class="text-[13px] font-bold px-3 py-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 active:scale-95 transition">🗺️ Ver en Mapa</a>
+          <button data-del="${esc(l.id)}" class="text-[13px] font-bold px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 active:scale-95 transition" aria-label="Eliminar registro">✕</button>
+        </div>
+      </div>
+    </article>`).join('');
+
+  // Tabla desktop
+  const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+  table.classList.toggle('hidden', !(isDesktop && list.length));
+  tbody.innerHTML = list.map(l => `
+    <tr class="border-b border-slate-100 dark:border-slate-800">
+      <td class="py-2.5 pr-3 font-semibold">${esc(l.nombre)}</td>
+      <td class="py-2.5 pr-3">${badge(l.tipo)}</td>
+      <td class="py-2.5 pr-3 tabular-nums whitespace-nowrap">${esc(l.fecha || fmtDateTime(l.iso))}</td>
+      <td class="py-2.5 pr-3 tabular-nums text-slate-500">${l.lat}, ${l.lon}</td>
+      <td class="py-2.5"><a class="font-bold text-indigo-600 dark:text-indigo-300 underline underline-offset-2" target="_blank" rel="noopener" href="${esc(l.mapsUrl)}">Mapa ↗</a></td>
+    </tr>`).join('');
+
+  updateStats(all); updateWorkersMeta(all);
+}
+
+logsEl.addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-del]');
+  if(!btn) return;
+  const logs = loadLogs().filter(l => l.id !== btn.dataset.del);
+  saveLogs(logs); render(); toast('Registro eliminado.','info');
+});
+
+function updateStats(all){
+  $('stat-total').textContent = all.length;
+  const today = new Date().toDateString();
+  $('stat-today').textContent = all.filter(l => new Date(l.iso).toDateString() === today).length;
+  // En turno: último evento por trabajador == ENTRADA
+  const lastBy = {};
+  [...all].reverse().forEach(l => { lastBy[l.nombre.toLowerCase()] = l.tipo; });
+  $('stat-open').textContent = Object.values(lastBy).filter(t => t === 'ENTRADA').length;
+}
+
+function updateWorkersMeta(all){
+  const names = [...new Set(all.map(l => l.nombre.trim()))].filter(Boolean).slice(0, 50);
+  $('workers-list').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+  const wrap = $('recent-wrap'), chips = $('recent-chips');
+  const recents = [...new Set(all.map(l => l.nombre.trim()))].filter(Boolean).slice(0, 8);
+  wrap.classList.toggle('hidden', !recents.length);
+  chips.innerHTML = recents.map(n => `<button data-chip="${esc(n)}" class="shrink-0 text-[13px] font-semibold px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 active:scale-95 transition">${esc(n)}</button>`).join('');
+}
+$('recent-chips').addEventListener('click', (e)=>{
+  const b = e.target.closest('[data-chip]');
+  if(b){ workerInput.value = b.dataset.chip; saveLastWorker(b.dataset.chip); workerInput.focus(); }
+});
+
+filterName.addEventListener('input', render);
+filterType.addEventListener('change', render);
+window.matchMedia('(min-width: 768px)').addEventListener?.('change', render);
+
+/* ---------- Exportar CSV ---------- */
+$('btn-csv').addEventListener('click', ()=>{
+  const list = filtered();
+  if(!list.length){ toast('No hay registros para exportar.','warn'); return; }
+  const head = ['ID','Nombre','Evento','FechaHora','Latitud','Longitud','Precision_m','GoogleMaps'];
+  const q = (v) => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const rows = list.map(l => [l.id, l.nombre, l.tipo, l.fecha || fmtDateTime(l.iso), l.lat, l.lon, l.acc ?? '', l.mapsUrl].map(q).join(','));
+  const csv = '﻿' + [head.map(q).join(','), ...rows].join('\r\n'); // BOM para Excel
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `geoturnos_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  toast(`CSV exportado con ${list.length} registros.`,'ok');
+});
+
+/* ---------- Borrar ---------- */
+const modal = $('modal');
+$('btn-clear').addEventListener('click', ()=>{
+  const n = loadLogs().length;
+  if(!n){ toast('El historial ya está vacío.','info'); return; }
+  $('modal-count').textContent = n;
+  modal.classList.remove('hidden');
+});
+$('modal-cancel').addEventListener('click', ()=>modal.classList.add('hidden'));
+modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.add('hidden'); });
+document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') modal.classList.add('hidden'); });
+$('modal-confirm').addEventListener('click', ()=>{
+  saveLogs([]); modal.classList.add('hidden'); render();
+  setStatus('idle','Historial borrado. Listo para nuevos fichajes.');
+  toast('Historial borrado.','info');
+});
+
+/* ---------- Tema / reloj / avisos ---------- */
+function paintThemeBtn(){ $('theme-btn').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙'; }
+$('theme-btn').addEventListener('click', ()=>{
+  document.documentElement.classList.toggle('dark');
+  try{ localStorage.setItem(THEME_KEY, document.documentElement.classList.contains('dark') ? 'dark' : 'light'); }catch(e){}
+  paintThemeBtn();
+});
+paintThemeBtn();
+
+setInterval(()=>{ $('clock').textContent = new Date().toLocaleTimeString('es-ES'); }, 1000);
+$('clock').textContent = new Date().toLocaleTimeString('es-ES');
+
+if(location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && location.protocol !== 'capacitor:'){
+  $('https-warn').classList.remove('hidden');
+}
+if(!('geolocation' in navigator)){
+  setStatus('err','Este navegador no soporta geolocalización.');
+  $('gps-pill').textContent = '⛔ Sin GPS';
+}
+
+/* ---------- Init ---------- */
+workerInput.value = getLastWorker(); // restaura el nombre guardado
+paintWorkerSaved();
+render();
+</script>
+</body>
+</html>
